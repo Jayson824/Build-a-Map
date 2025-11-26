@@ -4,10 +4,13 @@
   <meta charset="utf-8">
   <title>Interactive Key Account Map</title>
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+  <!-- Leaflet + XLSX + html2canvas -->
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-  <!-- XLSX for reading Excel / CSV -->
   <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
+
   <style>
     :root { --print-scale: 1; }
 
@@ -55,6 +58,9 @@
       border-bottom: 1px solid #ddd;
       border-radius: 8px 8px 0 0;
       cursor: move;
+    }
+    .header-right {
+      display:flex; gap:4px; align-items:center;
     }
     .tools-title { font-weight: 600; font-size: 12px; }
     .tools-min-btn {
@@ -185,7 +191,7 @@
       position: fixed; z-index: 2000; display: none;
       background: #fff; border: 1px solid #bbb; border-radius: 6px;
       box-shadow: 0 4px 12px rgba(0,0,0,0.15); overflow: hidden;
-      min-width: 180px; font: 14px system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
+      min-width: 190px; font: 14px system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
     }
     .ctx-item { padding: 8px 12px; cursor: pointer; user-select: none; white-space: nowrap; }
     .ctx-item:hover { background: #f3f3f3; }
@@ -288,7 +294,10 @@
 <div id="toolsPanel" class="tools-panel">
   <div id="toolsHeader" class="tools-header">
     <div class="tools-title">Marker Tools</div>
-    <button id="panelToggle" class="tools-min-btn" title="Compact / Expand">◻︎</button>
+    <div class="header-right">
+      <button id="panelToggle" class="tools-min-btn" title="Compact / Expand">◻︎</button>
+      <button id="panelHide" class="tools-min-btn" title="Hide tools panel">✕</button>
+    </div>
   </div>
   <div id="toolsBody" class="tools-body">
     <div class="row" id="colorRow">
@@ -349,11 +358,13 @@
       <button id="locationAdd" class="btn" title="Geocode and add marker">➕ Add</button>
     </div>
 
-    <!-- Save / Load / Clear / Export / Import -->
+    <!-- Save / Load / Clear / Export / Import / Undo -->
     <div class="row">
       <button id="saveMarkers"   class="btn" title="Save markers to this browser">💾 Save</button>
       <button id="loadMarkers"   class="btn" title="Load markers from this browser">📥 Load</button>
       <button id="clearMarkers"  class="btn" title="Clear markers (selection or all)">🧹 Clear</button>
+      <!-- GO BACK BUTTON IS HERE -->
+      <button id="undoMarkers"   class="btn" title="Restore markers from last clear" disabled>↩ Go Back</button>
       <button id="exportMarkers" class="btn" title="Download markers as JSON">⬇️ Export</button>
       <label class="btn" for="importFile" title="Import markers JSON">⬆️ Import
         <input id="importFile" type="file" accept="application/json" style="display:none;">
@@ -365,13 +376,28 @@
       <button id="globalView" class="btn" title="Toggle round global view">🌍 Global View</button>
     </div>
 
+    <!-- Background controls -->
+    <div class="row">
+      <span><b>Background:</b></span>
+      <select id="bgMode" style="font-size:11px;">
+        <option value="world" selected>World map (online)</option>
+        <option value="image">Custom image overlay</option>
+      </select>
+      <label class="btn" for="bgImageFile" title="Upload background image">
+        🖼 Image
+        <input id="bgImageFile" type="file" accept="image/*" style="display:none;">
+      </label>
+      <span class="hint">Use image for building / floor / state map.</span>
+    </div>
+
     <!-- Bulk upload from spreadsheet -->
     <div class="row">
       <span><b>Bulk upload:</b></span>
       <input id="bulkFile" type="file"
              accept=".xlsx,.xls,.csv"
+             multiple
              style="font-size:11px;">
-      <span class="hint">Select a color first, then upload City/State list.</span>
+      <span class="hint">Select a color first, then upload up to 5 City/State files.</span>
     </div>
 
     <!-- Auto-retry config -->
@@ -390,6 +416,22 @@
     <div class="row">
       <span><b>Markers on map:</b></span>
       <span id="markerCount" class="hint">0</span>
+    </div>
+
+    <!-- Rename markers -->
+    <div class="row">
+      <span><b>Rename:</b></span>
+      <input id="renameBase" class="location-input" type="text"
+             placeholder="Base name (e.g., Store)">
+    </div>
+    <div class="row">
+      <label class="mode-label">
+        <input type="checkbox" id="renameSequential" checked> Add numbers
+      </label>
+      <span class="hint">
+        Renames markers in selection box (or all markers if no box is active).
+      </span>
+      <button id="renameApply" class="btn" title="Apply rename to selected markers">✏️ Apply</button>
     </div>
 
     <!-- Bulk status / counter -->
@@ -441,6 +483,13 @@
       <button id="printMap" class="btn" title="Print / Save as PDF">🖨️ Print / PDF</button>
     </div>
 
+    <!-- Save as image -->
+    <div class="row">
+      <span><b>Save image:</b></span>
+      <button id="savePng" class="btn" title="Save map as PNG">🖼 PNG</button>
+      <button id="saveJpg" class="btn" title="Save map as JPG/JPEG">🖼 JPG</button>
+    </div>
+
     <div class="row">
       <span class="hint">
         In <b>Identify</b> mode: left click + drag on the map to draw a red selection box.<br>
@@ -455,6 +504,7 @@
 <!-- Right-click context menu -->
 <div id="ctxMenu" class="ctx-menu">
   <div id="ctxAdd" class="ctx-item">➕ Add Marker</div>
+  <div id="ctxRename" class="ctx-item">✏️ Rename Marker</div>
   <div id="ctxRemove" class="ctx-item">🗑️ Remove Marker</div>
 </div>
 
@@ -480,11 +530,20 @@ const map = L.map('mapid', {
   wheelPxPerZoomLevel: 90
 });
 
-L.tileLayer('https://tile.jawg.io/730c231f-03a0-4382-980c-5c974f07b8d6/{z}/{x}/{y}{r}.png?access-token=33OVMEOjRZYDyvlqEWEaCECYspGLXatAr9KAZMLNjBnmQsysHwsusaSpaOVxWC9L', {
-  attribution: `<a href="https://www.jawg.io" target="_blank">&copy; Jawg</a> - <a href="https://www.openstreetmap.org" target="_blank">&copy; OpenStreetMap</a> contributors`
-}).addTo(map);
+const baseWorld = L.tileLayer(
+  'https://tile.jawg.io/730c231f-03a0-4382-980c-5c974f07b8d6/{z}/{x}/{y}{r}.png?access-token=33OVMEOjRZYDyvlqEWEaCECYspGLXatAr9KAZMLNjBnmQsysHwsusaSpaOVxWC9L',
+  {
+    attribution: `<a href="https://www.jawg.io" target="_blank">&copy; Jawg</a> - <a href="https://www.openstreetmap.org" target="_blank">&copy; OpenStreetMap</a> contributors`
+  }
+).addTo(map);
 
-/* --- Master layer --- */
+/* Image overlay for custom background */
+let bgImageOverlay = null;
+
+/* Tools panel reference for hide/show control */
+const toolsPanelEl = document.getElementById('toolsPanel');
+
+/* --- Master marker layer --- */
 const allLayer = L.layerGroup().addTo(map);
 
 /* --- Global view helper --- */
@@ -629,12 +688,35 @@ const ClearControl = L.Control.extend({
 });
 map.addControl(new ClearControl());
 
+/* --- Show/Hide tools control on the map --- */
+const ToolsControl = L.Control.extend({
+  options: { position: 'topleft' },
+  onAdd: function(map) {
+    const container = L.DomUtil.create('div', 'leaflet-bar');
+    const link = L.DomUtil.create('a', '', container);
+    link.href = '#';
+    link.title = 'Show / Hide tools panel';
+    link.innerHTML = '🧰';
+    L.DomEvent.on(link, 'click', (e) => {
+      L.DomEvent.stop(e);
+      if (toolsPanelEl.style.display === 'none') {
+        toolsPanelEl.style.display = 'flex';
+      } else {
+        toolsPanelEl.style.display = 'none';
+      }
+    });
+    return container;
+  }
+});
+map.addControl(new ToolsControl());
+
 /* --- Floating tools panel: drag & resize --- */
 (() => {
   const panel   = document.getElementById('toolsPanel');
   const header  = document.getElementById('toolsHeader');
   const resizer = document.getElementById('panelResizer');
   const toggle  = document.getElementById('panelToggle');
+  const hideBtn = document.getElementById('panelHide');
 
   let compact = false;
   let dragging = false, resizing = false;
@@ -646,6 +728,7 @@ map.addControl(new ClearControl());
 
   panel.addEventListener('mousedown', () => panel.style.zIndex = 2000);
 
+  // Dragging
   header.addEventListener('mousedown', (e) => {
     dragging = true;
     startX = e.clientX; startY = e.clientY;
@@ -666,6 +749,7 @@ map.addControl(new ClearControl());
     document.body.style.cursor = '';
   });
 
+  // Resizing
   resizer.addEventListener('mousedown', (e) => {
     resizing = true;
     const rect = panel.getBoundingClientRect();
@@ -689,6 +773,7 @@ map.addControl(new ClearControl());
     document.body.style.cursor = '';
   });
 
+  // Toggle compact mode
   toggle.addEventListener('click', () => {
     compact = !compact;
     panel.classList.toggle('compact', compact);
@@ -703,6 +788,11 @@ map.addControl(new ClearControl());
       panel.style.width  = Math.min(640, Math.max(MIN_NORMAL.w, Math.round(rect.width * 1.2))) + 'px';
       panel.style.height = Math.min(Math.round(window.innerHeight * 0.8), Math.max(MIN_NORMAL.h, Math.round(rect.height * 1.2))) + 'px';
     }
+  });
+
+  // Hide button
+  hideBtn.addEventListener('click', () => {
+    panel.style.display = 'none';
   });
 })();
 
@@ -737,7 +827,7 @@ customIconFile.addEventListener('change', (e) => {
 
 const colorRowEl = document.getElementById('colorRow');
 
-/* Color swatches: toggle on/off, change current color, and optionally recolor selection */
+/* Color swatches: toggle on/off, change current color, recolor selection */
 colorRowEl.addEventListener('click', (e) => {
   const sw = e.target.closest('.swatch');
   if (!sw) return;
@@ -819,13 +909,56 @@ document.getElementById('printMap').addEventListener('click', () => {
   window.print();
 });
 
-/* --- Save/Load/Export/Import/Clear/GlobalView --- */
+/* --- Save map as PNG / JPG using html2canvas --- */
+const savePngBtn = document.getElementById('savePng');
+const saveJpgBtn = document.getElementById('saveJpg');
+
+function downloadMapImage(type) {
+  const mapEl = document.getElementById('mapid');
+  const ext = type === 'jpeg' ? 'jpg' : 'png';
+
+  html2canvas(mapEl, {
+    useCORS: true,
+    logging: false,
+    backgroundColor: null,
+    scale: 2
+  }).then(canvas => {
+    const mime = type === 'jpeg' ? 'image/jpeg' : 'image/png';
+    canvas.toBlob(blob => {
+      if (!blob) {
+        alert('Failed to create image blob.');
+        return;
+      }
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      const ts = new Date().toISOString().replace(/[:T]/g, '-').split('.')[0];
+      a.href = url;
+      a.download = `map-${ts}.${ext}`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    }, mime, 0.95);
+  }).catch(err => {
+    console.error(err);
+    alert('Unable to capture map as an image in this browser.');
+  });
+}
+
+savePngBtn.addEventListener('click', () => downloadMapImage('png'));
+saveJpgBtn.addEventListener('click', () => downloadMapImage('jpeg'));
+
+/* --- Save/Load/Export/Import/Clear/GlobalView/Undo --- */
 const LS_KEY = 'customMarkers_v1';
+const undoBtn = document.getElementById('undoMarkers');
+let lastMarkerSnapshot = null;
+
 document.getElementById('saveMarkers').addEventListener('click', saveMarkersToLocalStorage);
 document.getElementById('loadMarkers').addEventListener('click', () => loadMarkersFromLocalStorage(true));
 document.getElementById('exportMarkers').addEventListener('click', exportMarkersJSON);
 document.getElementById('clearMarkers').addEventListener('click', () => showClearConfirm());
 document.getElementById('importFile').addEventListener('change', (e) => importMarkersFromFile(e.target.files[0]));
+undoBtn.addEventListener('click', undoLastClear);
 
 /* Global view toggle -> round globe style */
 let isGlobeMode = false;
@@ -843,6 +976,55 @@ globalBtn.addEventListener('click', () => {
     map.setView([20, 0], 2.5);
   }
   map.invalidateSize();
+});
+
+/* --- Background controls (world vs custom image) --- */
+const bgModeSelect = document.getElementById('bgMode');
+const bgImageInput = document.getElementById('bgImageFile');
+
+bgModeSelect.addEventListener('change', () => {
+  const mode = bgModeSelect.value;
+  if (mode === 'world') {
+    if (!map.hasLayer(baseWorld)) baseWorld.addTo(map);
+    if (bgImageOverlay) map.removeLayer(bgImageOverlay);
+    map.setView([20, 0], 2.5);
+  } else {
+    if (!bgImageOverlay) {
+      alert('Choose a background image file first.');
+      bgModeSelect.value = 'world';
+      return;
+    }
+    if (map.hasLayer(baseWorld)) map.removeLayer(baseWorld);
+    bgImageOverlay.addTo(map);
+    map.fitBounds(bgImageOverlay.getBounds());
+  }
+});
+
+bgImageInput.addEventListener('change', (e) => {
+  const file = e.target.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = (ev) => {
+    const img = new Image();
+    img.onload = () => {
+      const w = img.width;
+      const h = img.height;
+      const bounds = [[0, 0], [h, w]];
+      if (bgImageOverlay) map.removeLayer(bgImageOverlay);
+      bgImageOverlay = L.imageOverlay(ev.target.result, bounds);
+      if (bgModeSelect.value === 'image') {
+        if (map.hasLayer(baseWorld)) map.removeLayer(baseWorld);
+        bgImageOverlay.addTo(map);
+        map.fitBounds(bounds);
+      } else {
+        bgImageOverlay.addTo(map);
+        map.fitBounds(bounds);
+        bgModeSelect.value = 'image';
+      }
+    };
+    img.src = ev.target.result;
+  };
+  reader.readAsDataURL(file);
 });
 
 /* --- Marker helpers --- */
@@ -871,7 +1053,7 @@ function getEmojiIconHtml(colorOrEmoji) {
       height:18px;
       border-radius:50%;
       background:${c};
-      border:2px solid #fff;
+      border:2px solid:#fff;
       box-shadow:0 0 2px rgba(0,0,0,0.4);
     "></span>`;
   }
@@ -913,20 +1095,45 @@ function makeMarker(latlng, colorOrEmoji, name = null) {
 }
 
 function attachMarkerUX(marker, emoji) {
+  function getLabel() {
+    return marker.options.metaName
+      ? marker.options.metaName
+      : formatLatLng(marker.getLatLng());
+  }
+
   marker.on('click', () => {
-    const label = marker.options.metaName ? marker.options.metaName : formatLatLng(marker.getLatLng());
-    marker.bindPopup(`<div class="popup-box"><b>${emoji}</b><br>${label}</div>`).openPopup();
+    const label = getLabel();
+    marker
+      .bindPopup(`<div class="popup-box"><b>${emoji}</b><br>${label}</div>`)
+      .openPopup();
   });
+
   marker.on('mouseover', () => {
-    const label = marker.options.metaName ? marker.options.metaName : formatLatLng(marker.getLatLng());
-    marker.bindTooltip(`${emoji} ${label}`, { direction: 'top' }).openTooltip();
+    const label = getLabel();
+    marker
+      .bindTooltip(`${emoji} ${label}`, { direction: 'top' })
+      .openTooltip();
   });
   marker.on('mouseout', () => marker.closeTooltip());
 
+  // Double-click to rename quickly
+  marker.on('dblclick', () => {
+    const current = marker.options.metaName || '';
+    const name = prompt('Enter new name for this marker:', current);
+    if (name !== null) {
+      marker.options.metaName = name.trim();
+    }
+  });
+
+  // Right-click context menu
   marker.on('contextmenu', (ev) => {
     if (ev.originalEvent) ev.originalEvent.preventDefault();
     L.DomEvent.stop(ev);
-    showCtxMenu(ev.originalEvent.clientX, ev.originalEvent.clientY, { type: 'marker', marker, latlng: ev.latlng });
+    showCtxMenu(ev.originalEvent.clientX, ev.originalEvent.clientY, {
+      type: 'marker',
+      marker,
+      latlng: ev.latlng
+    });
   });
 }
 
@@ -934,14 +1141,20 @@ function attachMarkerUX(marker, emoji) {
 const ctxMenu   = document.getElementById('ctxMenu');
 const ctxAdd    = document.getElementById('ctxAdd');
 const ctxRemove = document.getElementById('ctxRemove');
+const ctxRename = document.getElementById('ctxRename');
 let ctxTarget = null;
 
 function showCtxMenu(x, y, target) {
   ctxTarget = target;
-  if (target.type === 'marker') ctxRemove.classList.remove('disabled');
-  else                          ctxRemove.classList.add('disabled');
+  if (target.type === 'marker') {
+    ctxRemove.classList.remove('disabled');
+    ctxRename.classList.remove('disabled');
+  } else {
+    ctxRemove.classList.add('disabled');
+    ctxRename.classList.add('disabled');
+  }
 
-  const menuWidth = 200, menuHeight = 90;
+  const menuWidth = 210, menuHeight = 120;
   const vw = window.innerWidth, vh = window.innerHeight;
   const left = Math.min(x, vw - menuWidth - 6);
   const top  = Math.min(y, vh - menuHeight - 6);
@@ -960,9 +1173,19 @@ document.addEventListener('click', (e) => {
     mk.addTo(allLayer);
     hideCtxMenu();
   } else if (e.target === ctxRemove) {
-    if (!ctxTarget) return;
-    if (ctxTarget.type === 'marker' && !ctxRemove.classList.contains('disabled')) {
+    if (!ctxTarget || ctxRemove.classList.contains('disabled')) return;
+    if (ctxTarget.type === 'marker') {
       allLayer.removeLayer(ctxTarget.marker);
+    }
+    hideCtxMenu();
+  } else if (e.target === ctxRename) {
+    if (!ctxTarget || ctxRename.classList.contains('disabled')) return;
+    if (ctxTarget.type === 'marker') {
+      const current = ctxTarget.marker.options.metaName || '';
+      const name = prompt('Enter new name for this marker:', current);
+      if (name !== null) {
+        ctxTarget.marker.options.metaName = name.trim();
+      }
     }
     hideCtxMenu();
   } else {
@@ -981,9 +1204,7 @@ map.on('contextmenu', (e) => {
 const markerCountEl = document.getElementById('markerCount');
 function updateMarkerCount() {
   let count = 0;
-  allLayer.eachLayer(layer => {
-    if (layer instanceof L.Marker) count++;
-  });
+  allLayer.eachLayer(layer => { if (layer instanceof L.Marker) count++; });
   markerCountEl.textContent = String(count);
 }
 allLayer.on('layeradd', updateMarkerCount);
@@ -1078,8 +1299,19 @@ function importMarkersFromFile(file) {
   reader.readAsText(file);
 }
 
-/* Clear triggered by user (uses selection if present) */
+/* Clear triggered by user (uses selection if present) + snapshot for undo */
 function clearMarkersUserTriggered() {
+  const current = serializeAllMarkers();
+  if (!current.length) {
+    lastMarkerSnapshot = null;
+    undoBtn.disabled = true;
+    return;
+  }
+
+  // Save snapshot BEFORE modifying markers
+  lastMarkerSnapshot = current;
+  undoBtn.disabled = false;
+
   if (!selectionBounds) {
     clearAllMarkersHard();
     return;
@@ -1095,6 +1327,20 @@ function clearMarkersUserTriggered() {
   });
   toRemove.forEach(m => allLayer.removeLayer(m));
   updateMarkerCount();
+}
+
+/* Undo last Clear (Go Back) */
+function undoLastClear() {
+  if (!lastMarkerSnapshot || !lastMarkerSnapshot.length) {
+    alert('No previous marker state to restore.');
+    lastMarkerSnapshot = null;
+    undoBtn.disabled = true;
+    return;
+  }
+  recreateFromSerialized(lastMarkerSnapshot);
+  lastMarkerSnapshot = null;
+  undoBtn.disabled = true;
+  alert('Markers restored to their state before the last Clear.');
 }
 
 /* Hook up confirmation buttons */
@@ -1218,7 +1464,7 @@ locationInput.addEventListener('keydown', (e) => {
   }
 });
 
-/* --- Bulk upload from Excel/CSV with City/State + Retry Failed --- */
+/* --- Bulk upload from Excel/CSV with multiple files + Retry Failed --- */
 const bulkInput = document.getElementById('bulkFile');
 const bulkStatusEl = document.getElementById('bulkStatus');
 const bulkReportRow = document.getElementById('bulkReportRow');
@@ -1265,9 +1511,11 @@ function refreshFailedUI(labelPrefix = 'Locations not added:') {
 
 toggleFailedBtn.addEventListener('click', () => {
   failedListExpanded = !failedListExpanded;
-  refreshFailedUI(lastFailedLocations.length
-    ? bulkReportEl.textContent.split('\n')[0] || 'Locations not added:'
-    : 'Locations not added:');
+  refreshFailedUI(
+    lastFailedLocations.length
+      ? bulkReportEl.textContent.split('\n')[0] || 'Locations not added:'
+      : 'Locations not added:'
+  );
 });
 
 bulkInput.addEventListener('change', handleBulkUpload);
@@ -1279,9 +1527,10 @@ function markBulkTimestamp() {
   bulkTimestampEl.textContent = `Last bulk run: ${ts}`;
 }
 
+/* Accept up to 5 files at once */
 async function handleBulkUpload(e) {
-  const file = e.target.files[0];
-  if (!file) return;
+  const files = Array.from(e.target.files || []);
+  if (!files.length) return;
 
   if (!currentColor) {
     alert('Please select a marker color first (swatch in the key box).');
@@ -1289,120 +1538,169 @@ async function handleBulkUpload(e) {
     return;
   }
 
-  const reader = new FileReader();
-  reader.onload = async (evt) => {
+  const MAX_FILES = 5;
+  let toProcess = files;
+  if (files.length > MAX_FILES) {
+    alert(`You selected ${files.length} files. Only the first ${MAX_FILES} will be processed.`);
+    toProcess = files.slice(0, MAX_FILES);
+  }
+
+  e.target.value = '';
+
+  lastFailedLocations = [];
+  failedListExpanded = false;
+  refreshFailedUI();
+  setBulkProgress(0, 1);
+  bulkStatusEl.textContent = `Processing ${toProcess.length} file(s)...`;
+
+  let grandTotal = 0;
+  let grandSuccess = 0;
+
+  for (let i = 0; i < toProcess.length; i++) {
+    const file = toProcess[i];
+    bulkStatusEl.textContent = `Processing file ${i + 1} of ${toProcess.length}: ${file.name}`;
     try {
-      lastFailedLocations = [];
-      failedListExpanded = false;
-      refreshFailedUI();
-      setBulkProgress(0, 1);
-
-      const data = new Uint8Array(evt.target.result);
-      const workbook = XLSX.read(data, { type: 'array' });
-      const sheetName = workbook.SheetNames[0];
-      const sheet = workbook.Sheets[sheetName];
-      const rows = XLSX.utils.sheet_to_json(sheet, { header: 1 });
-
-      if (!rows || !rows.length) {
-        alert('No rows found in the uploaded file.');
-        bulkStatusEl.textContent = 'No rows found in file.';
-        setBulkProgress(0, 1);
-        return;
-      }
-
-      let startIndex = 0;
-      let cityCol = 0;
-      let stateCol = 1;
-
-      const header = rows[0].map(v => String(v || '').trim().toLowerCase());
-      const hasHeaderCity = header.includes('city');
-      const hasHeaderState = header.includes('state');
-
-      if (hasHeaderCity || hasHeaderState) {
-        cityCol = header.indexOf('city');
-        stateCol = header.indexOf('state');
-        if (cityCol === -1) cityCol = 0;
-        if (stateCol === -1) stateCol = 1;
-        startIndex = 1;
-      }
-
-      const locations = [];
-      for (let i = startIndex; i < rows.length; i++) {
-        const row = rows[i];
-        if (!row) continue;
-        const city = (row[cityCol] || '').toString().trim();
-        const state = (row[stateCol] || '').toString().trim();
-        if (!city) continue;
-        const query = state ? `${city}, ${state}` : city;
-        locations.push(query);
-      }
-
-      if (!locations.length) {
-        alert('No City/State data found. Expected columns named "City" and "State" or the first two columns to be City and State.');
-        bulkStatusEl.textContent = 'No valid City/State data found.';
-        setBulkProgress(0, 1);
-        return;
-      }
-
-      const total = locations.length;
-      bulkStatusEl.textContent = `Loaded ${total} location(s) from file.`;
-      if (!confirm(`Geocode and add ${total} location(s) as ${currentColor} markers?`)) {
-        bulkStatusEl.textContent = 'Bulk upload cancelled.';
-        setBulkProgress(0, 1);
-        return;
-      }
-
-      let processed = 0;
-      let successCount = 0;
-      const failed = [];
-      const retries = getAutoRetryCount();
-
-      bulkStatusEl.textContent = `Pending ${total} location(s)...`;
-      setBulkProgress(0, total);
-
-      for (const loc of locations) {
-        const result = await geocodeWithRetries(loc, retries);
-        if (result) {
-          const m = makeMarker([result.lat, result.lon], currentColor, result.displayName || loc);
-          m.addTo(allLayer);
-          successCount++;
-        } else {
-          console.warn('Not found after retries:', loc);
-          failed.push(loc);
-        }
-        processed++;
-        setBulkProgress(processed, total);
-        bulkStatusEl.textContent = `Processed ${processed} of ${total} location(s)...`;
-      }
-
-      bulkStatusEl.textContent =
-        `Bulk upload complete. Added ${successCount} marker(s); ${failed.length} location(s) not added (of ${total}).`;
-
-      lastFailedLocations = failed.slice();
-      markBulkTimestamp();
-      refreshFailedUI('Locations not added:');
-
-      alert(`Finished bulk upload. Added ${successCount} marker(s). ${failed.length} location(s) not added.`);
-
-      if (successCount) {
-        goToGlobalView();
-      }
+      const result = await processSingleBulkFile(file);
+      grandTotal   += result.total;
+      grandSuccess += result.success;
     } catch (err) {
-      console.error(err);
-      alert('Failed to read or process the uploaded file.');
-      bulkStatusEl.textContent = 'Error reading or processing file.';
-      setBulkProgress(0, 1);
-      // Keep previous failed list if there was one
-      refreshFailedUI(
-        lastFailedLocations.length
-          ? 'Locations not added (from previous run):'
-          : 'Locations not added:'
-      );
-    } finally {
-      e.target.value = '';
+      console.error('Error processing file', file.name, err);
+      alert(`Error while processing file: ${file.name}`);
     }
-  };
-  reader.readAsArrayBuffer(file);
+  }
+
+  markBulkTimestamp();
+  bulkStatusEl.textContent =
+    `Bulk upload complete across ${toProcess.length} file(s). Added ${grandSuccess} marker(s) out of ${grandTotal} location(s). ${lastFailedLocations.length} location(s) not added.`;
+
+  refreshFailedUI(
+    lastFailedLocations.length
+      ? 'Locations not added (across all files):'
+      : 'Locations not added:'
+  );
+
+  if (grandSuccess) {
+    goToGlobalView();
+  }
+}
+
+/* Process one bulk file (used by handleBulkUpload) */
+function processSingleBulkFile(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = async (evt) => {
+      try {
+        setBulkProgress(0, 1);
+
+        const data = new Uint8Array(evt.target.result);
+        const workbook = XLSX.read(data, { type: 'array' });
+        const sheetName = workbook.SheetNames[0];
+        const sheet = workbook.Sheets[sheetName];
+        const rows = XLSX.utils.sheet_to_json(sheet, { header: 1 });
+
+        if (!rows || !rows.length) {
+          alert(`No rows found in file: ${file.name}`);
+          bulkStatusEl.textContent = `No rows found in ${file.name}.`;
+          setBulkProgress(0, 1);
+          resolve({ total: 0, success: 0 });
+          return;
+        }
+
+        let startIndex = 0;
+        let cityCol = 0;
+        let stateCol = 1;
+
+        const header = rows[0].map(v => String(v || '').trim().toLowerCase());
+        const hasHeaderCity = header.includes('city');
+        const hasHeaderState = header.includes('state');
+
+        if (hasHeaderCity || hasHeaderState) {
+          cityCol = header.indexOf('city');
+          stateCol = header.indexOf('state');
+          if (cityCol === -1) cityCol = 0;
+          if (stateCol === -1) stateCol = 1;
+          startIndex = 1;
+        }
+
+        const locations = [];
+        for (let i = startIndex; i < rows.length; i++) {
+          const row = rows[i];
+          if (!row) continue;
+          const city  = (row[cityCol]  || '').toString().trim();
+          const state = (row[stateCol] || '').toString().trim();
+          if (!city) continue;
+          const query = state ? `${city}, ${state}` : city;
+          locations.push(query);
+        }
+
+        if (!locations.length) {
+          alert(`No City/State data found in ${file.name}. Expected columns named "City" and "State" or the first two columns to be City and State.`);
+          bulkStatusEl.textContent = `No valid City/State data in ${file.name}.`;
+          setBulkProgress(0, 1);
+          resolve({ total: 0, success: 0 });
+          return;
+        }
+
+        const total = locations.length;
+        bulkStatusEl.textContent = `Loaded ${total} location(s) from ${file.name}.`;
+
+        if (!confirm(`Geocode and add ${total} location(s) from "${file.name}" as ${currentColor} markers?`)) {
+          bulkStatusEl.textContent = `Bulk upload from ${file.name} cancelled.`;
+          setBulkProgress(0, total);
+          resolve({ total: 0, success: 0 });
+          return;
+        }
+
+        let processed = 0;
+        let successCount = 0;
+        const failed = [];
+        const retries = getAutoRetryCount();
+
+        bulkStatusEl.textContent = `Processing ${total} location(s) from ${file.name}...`;
+        setBulkProgress(0, total);
+
+        for (const loc of locations) {
+          const result = await geocodeWithRetries(loc, retries);
+          if (result) {
+            const m = makeMarker([result.lat, result.lon], currentColor, result.displayName || loc);
+            m.addTo(allLayer);
+            successCount++;
+          } else {
+            console.warn('Not found after retries:', loc);
+            failed.push(loc);
+          }
+          processed++;
+          setBulkProgress(processed, total);
+          bulkStatusEl.textContent =
+            `Processing ${processed} of ${total} location(s) from ${file.name}...`;
+        }
+
+        if (failed.length) {
+          lastFailedLocations = lastFailedLocations.concat(failed);
+        }
+
+        bulkStatusEl.textContent =
+          `File "${file.name}" complete. Added ${successCount} marker(s); ${failed.length} location(s) not added (of ${total}).`;
+        alert(
+          `Finished bulk upload for "${file.name}". Added ${successCount} marker(s). ${failed.length} location(s) not added.`
+        );
+
+        resolve({ total, success: successCount });
+      } catch (err) {
+        console.error(err);
+        bulkStatusEl.textContent = `Error processing file ${file.name}.`;
+        setBulkProgress(0, 1);
+        reject(err);
+      }
+    };
+    reader.onerror = (err) => {
+      console.error('File read error:', err);
+      bulkStatusEl.textContent = `Error reading file ${file.name}.`;
+      setBulkProgress(0, 1);
+      reject(err);
+    };
+    reader.readAsArrayBuffer(file);
+  });
 }
 
 async function retryFailedLocations() {
@@ -1475,6 +1773,41 @@ function exportFailedList() {
   URL.revokeObjectURL(url);
 }
 
+/* --- Mass rename markers --- */
+const renameBaseInput = document.getElementById('renameBase');
+const renameSequential = document.getElementById('renameSequential');
+const renameApplyBtn = document.getElementById('renameApply');
+
+renameApplyBtn.addEventListener('click', () => {
+  const base = renameBaseInput.value.trim();
+  if (!base) {
+    alert('Enter a base name to rename markers.');
+    return;
+  }
+
+  const selected = [];
+  allLayer.eachLayer(layer => {
+    if (!(layer instanceof L.Marker)) return;
+    if (!selectionBounds || selectionBounds.contains(layer.getLatLng())) {
+      selected.push(layer);
+    }
+  });
+
+  if (!selected.length) {
+    alert('No markers found to rename. Draw a selection box in Identify mode or leave no box to rename all markers.');
+    return;
+  }
+
+  const seq = renameSequential.checked;
+  selected.forEach((marker, idx) => {
+    const newName = seq ? `${base} ${idx + 1}` : base;
+    marker.options.metaName = newName;
+    if (marker.isPopupOpen()) marker.closePopup();
+  });
+
+  alert(`Renamed ${selected.length} marker(s). Click markers to see updated names.`);
+});
+
 /* --- Load initial markers from markers.json (optional) --- */
 fetch('markers.json')
   .then(res => res.json())
@@ -1491,6 +1824,8 @@ fetch('markers.json')
     console.error('Failed to load markers.json', err);
     updateMarkerCount();
   });
+
+function inchesToPx(inches){ return Math.round(inches * 96); }
 </script>
 </body>
 </html>
